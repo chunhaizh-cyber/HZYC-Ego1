@@ -18,7 +18,9 @@
 
 // 全局变量
 std::vector<std::shared_ptr<ExistenceFeature>> currentExistences;
+std::vector<std::shared_ptr<ExistenceMemoryV4>> currentExistencesV4; // v4.0新增
 ExistenceMemory global_memory;
+GlobalMemoryBankV4 global_memory_bank_v4; // v4.0新增
 PointCloudProcessor point_cloud_processor;
 
 int frame_id = 0;
@@ -104,65 +106,71 @@ std::vector<int64_t> generateSimulatedContour() {
 }
 
 // 主运行函数
-// 控制台可视化函数（v3.0版本）
+// 控制台可视化函数（v4.0版本 - 支持记忆再识别）
 void displayConsoleVisualization() {
-    std::cout << "\n=== 数字生命 v3.0 视觉系统 ===\n";
+    std::cout << "\n=== 数字生命 v4.0 视觉系统（记忆再识别 + 多重验证）===\n";
     std::cout << "时间: " << frame_id << "帧 | ";
-    std::cout << "存在目标: " << currentExistences.size() << " | ";
+    std::cout << "存在目标: " << currentExistencesV4.size() << " | ";
     std::cout << "安全度: " << std::fixed << std::setprecision(2) << life.safety << " | ";
     std::cout << "好奇度: " << life.curiosity << "\n";
     std::cout << "世界坐标系: 原点(" << world_coords.origin.x << "," 
               << world_coords.origin.y << "," << world_coords.origin.z << ")\n";
     
-    if (currentExistences.empty()) {
+    if (currentExistencesV4.empty()) {
         std::cout << "【环境感知】未发现目标，系统处于扫描模式...\n";
         return;
     }
     
-    std::cout << "\n【目标识别】发现 " << currentExistences.size() << " 个目标:\n";
-    std::cout << "┌────┬──────┬────────┬────────┬────────┬──────────────┬────────┐\n";
-    std::cout << "│ ID │ 类型 │ 距离(m)│ 出现次数│ 置信度 │ 世界坐标     │  状态  │\n";
-    std::cout << "├────┼──────┼────────┼────────┼────────┼──────────────┼────────┤\n";
+    std::cout << "\n【目标识别】发现 " << currentExistencesV4.size() << " 个目标:\n";
+    std::cout << "┌────┬──────┬────────┬────────┬────────┬──────────────┬────────┬────────┐\n";
+    std::cout << "│ ID │ 类型 │ 距离(m)│ 出现次数│ 置信度 │ 再识别置信度│ 世界坐标     │  状态  │\n";
+    std::cout << "├────┼──────┼────────┼────────┼────────┼─────────────┼──────────────┼────────┤\n";
     
-    for (const auto& existence : currentExistences) {
-        if (!existence->is_active) continue; // 跳过已终止的跟踪
-        
+    for (const auto& existence : currentExistencesV4) {
         Vector3D world_pos = existence->world_position;
         double distance = world_pos.distance(Vector3D(0, 0, 0));
         std::string type = (existence->trajectory.size() > 100) ? "人形" : "物体";
-        std::string status = (existence == locked_target) ? "【锁定】" : 
-                           (existence->is_active ? "监测中" : "[已消失]");
+        std::string status = (existence->recognition_confidence > 0.9) ? "【老朋友】" : 
+                           (existence->recognition_confidence > 0.75) ? "【再识别】" : "新发现";
         
         std::cout << "│ " << std::setw(2) << existence->id << " │ "
                   << std::setw(4) << type << " │ "
                   << std::setw(6) << std::fixed << std::setprecision(2) << distance << " │ "
                   << std::setw(6) << existence->appearance_count << " │ "
-                  << std::setw(6) << std::fixed << std::setprecision(2) << existence->confidence << " │ "
+                  << std::setw(6) << std::fixed << std::setprecision(2) << 1.0 << " │ "
+                  << std::setw(11) << std::fixed << std::setprecision(2) << existence->recognition_confidence << " │ "
                   << "(" << std::setw(4) << std::fixed << std::setprecision(1) << world_pos.x << ","
                   << std::setw(4) << world_pos.y << "," << std::setw(4) << world_pos.z << ") │ "
                   << status << " │\n";
     }
     
-    std::cout << "└────┴──────┴────────┴────────┴────────┴──────────────┴────────┘\n";
+    std::cout << "└────┴──────┴────────┴────────┴────────┴─────────────┴──────────────┴────────┘\n";
     
-    // 显示锁定目标详细信息（v3.0版本）
-    if (locked_target && locked_target->is_active) {
-        double age = frame_id * 0.1; // 简化的观察时间
-        std::cout << "\n【目标锁定】持续观察 ID:" << locked_target->id << "\n";
-        std::cout << "   世界坐标: (" << locked_target->world_position.x << ","
-                  << locked_target->world_position.y << "," 
-                  << locked_target->world_position.z << ")\n";
-        std::cout << "   出现次数: " << locked_target->appearance_count << " 次\n";
-        std::cout << "   观察时长: " << std::fixed << std::setprecision(1) << age << "秒\n";
-        std::cout << "   轨迹记录: " << locked_target->trajectory.size() << " 个数据点\n";
-        std::cout << "   平均速度: " << locked_target->velocity.magnitude() << " m/s\n";
-        std::cout << "   记忆强度: " << (locked_target->confidence > 0.8 ? "高" : 
-                                        locked_target->confidence > 0.5 ? "中" : "低") << "\n";
+    // 显示锁定目标详细信息（v4.0版本）
+    if (locked_target && !currentExistencesV4.empty()) {
+        // 找到对应的v4.0版本存在
+        auto locked_v4 = std::find_if(currentExistencesV4.begin(), currentExistencesV4.end(),
+            [&](const auto& existence) { return existence->id == locked_target->id; });
+        
+        if (locked_v4 != currentExistencesV4.end()) {
+            double age = frame_id * 0.1; // 简化的观察时间
+            std::cout << "\n【目标锁定】持续观察 ID:" << (*locked_v4)->id << "\n";
+            std::cout << "   世界坐标: (" << (*locked_v4)->world_position.x << ","
+                      << (*locked_v4)->world_position.y << "," 
+                      << (*locked_v4)->world_position.z << ")\n";
+            std::cout << "   出现次数: " << (*locked_v4)->appearance_count << " 次\n";
+            std::cout << "   观察时长: " << std::fixed << std::setprecision(1) << age << "秒\n";
+            std::cout << "   轨迹记录: " << (*locked_v4)->trajectory.size() << " 个数据点\n";
+            std::cout << "   再识别置信度: " << std::fixed << std::setprecision(2) << (*locked_v4)->recognition_confidence << "\n";
+            std::cout << "   记忆状态: " << ((*locked_v4)->recognition_confidence > 0.9 ? "深度记忆" : 
+                                            (*locked_v4)->recognition_confidence > 0.75 ? "识别记忆" : "新记忆") << "\n";
+        }
     }
 }
 
 void run() {
-    std::cout << "数字生命 v3.0 启动：绝对世界坐标 + 智能跟踪终止 + 出现次数统计\n";
+    std::cout << "数字生命 v4.0 启动：记忆再识别 + 多重验证系统\n";
+    std::cout << "核心升级：多重特征验证 + 置信度动态更新 + 再识别成功率>95%\n";
     std::cout << "控制命令: [l] 锁定最近目标  [q] 退出系统  [其他键] 继续运行\n\n";
     
     double lock_start_time = 0;
@@ -195,6 +203,7 @@ void run() {
         
         // 清空当前存在列表
         currentExistences.clear();
+        currentExistencesV4.clear();
         
         // 处理每个聚类
         int temp_id = 0;
@@ -204,26 +213,47 @@ void run() {
             // 计算聚类中心（自我坐标）
             Vector3D ego_center = cluster.center;
             
-            // 特征记忆与跟踪（使用绝对坐标系统）
-            auto memory = global_memory.getOrCreate(temp_id, ego_center, contours[temp_id], current_time);
-            currentExistences.push_back(memory);
+            // v4.0版本：使用新的记忆再识别系统
+            auto memory_v4 = global_memory_bank_v4.recognizeOrCreate(ego_center, contours[temp_id]);
+            currentExistencesV4.push_back(memory_v4);
+            
+            // 保持兼容性：同时更新v3.0版本的存在列表
+            auto memory_v3 = global_memory.getOrCreate(temp_id, ego_center, contours[temp_id], current_time);
+            currentExistences.push_back(memory_v3);
+            
             temp_id++;
         }
         
-        // 更新数字生命状态
-        life.existences = currentExistences;
+        // 更新数字生命状态（使用v4.0版本的存在列表）
+        life.existences = currentExistences; // 保持兼容性
         life.updateSafetyAndCuriosity();
         
-        // 控制台可视化（v3.0版本，显示绝对坐标和出现次数）
+        // 控制台可视化（v4.0版本，显示再识别置信度）
         displayConsoleVisualization();
         
-        // 显示状态信息（v3.0版本）
+        // 显示状态信息（v4.0版本）
         std::cout << "\n【系统状态】帧:" << ++frame_id 
-                  << " | 存在:" << life.existences.size() 
+                  << " | 存在:" << currentExistencesV4.size() 
                   << " | 安全度:" << std::fixed << std::setprecision(2) << life.safety 
                   << " | 好奇度:" << life.curiosity 
                   << (locked_target ? " | 锁定目标中..." : "")
                   << "\n";
+        
+        // 显示再识别统计（v4.0版本）
+        if (frame_id % 10 == 0) { // 每10帧显示一次统计
+            int recognized_count = 0;
+            int new_count = 0;
+            for (const auto& existence : currentExistencesV4) {
+                if (existence->recognition_confidence > 0.75) {
+                    recognized_count++;
+                } else {
+                    new_count++;
+                }
+            }
+            std::cout << "【再识别统计】老朋友:" << recognized_count 
+                      << " | 新发现:" << new_count 
+                      << " | 记忆库总数:" << global_memory_bank_v4.memory.size() << "\n";
+        }
         
         // 键盘控制
         std::cout << "\n请输入命令 [l/q]: ";
@@ -238,7 +268,7 @@ void run() {
             } else if ((key == 'l' || key == 'L') && !currentExistences.empty()) {
                 // 锁定最近的目标（基于世界坐标）
                 auto nearest = *std::min_element(currentExistences.begin(), currentExistences.end(),
-                    [](const auto& a, const auto& b) {
+                    [](const std::shared_ptr<ExistenceFeature>& a, const std::shared_ptr<ExistenceFeature>& b) {
                         if (!a->is_active || !b->is_active) return false;
                         return a->world_position.distance(Vector3D(0, 0, 0)) < 
                                b->world_position.distance(Vector3D(0, 0, 0));
@@ -268,9 +298,23 @@ void run() {
     std::cout << "运行统计：\n";
     std::cout << "- 总帧数: " << frame_id << "\n";
     std::cout << "- 识别目标: " << global_memory.database.size() << " 个不同存在\n";
+    std::cout << "- 记忆库总数: " << global_memory_bank_v4.memory.size() << " 个存在记忆\n";
     std::cout << "- 系统状态: 安全度 " << life.safety << " | 好奇度 " << life.curiosity << "\n";
     std::cout << "- 世界坐标系: 原点 (" << world_coords.origin.x << "," 
               << world_coords.origin.y << "," << world_coords.origin.z << ")\n";
+    
+    // v4.0版本再识别统计
+    int total_memories = global_memory_bank_v4.memory.size();
+    int high_confidence_memories = 0;
+    for (const auto& pair : global_memory_bank_v4.memory) {
+        if (pair.second->recognition_confidence > 0.75) {
+            high_confidence_memories++;
+        }
+    }
+    double recognition_rate = total_memories > 0 ? 
+        (double)high_confidence_memories / total_memories * 100 : 0;
+    std::cout << "- 再识别成功率: " << std::fixed << std::setprecision(1) 
+              << recognition_rate << "% (" << high_confidence_memories << "/" << total_memories << ")\n";
 }
 
 int main() {

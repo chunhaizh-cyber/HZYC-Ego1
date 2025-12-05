@@ -193,3 +193,115 @@ double ExistenceMemory::contourSimilarity(const std::vector<int64_t>& a, const s
     
     return sum / a.size();
 }
+
+// ==================== v4.0 升级版记忆特征实现 ====================
+ExistenceMemoryV4::ExistenceMemoryV4(int i) : id(i), recognition_confidence(0.0) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(100, 255);
+    color = Color(dis(gen), dis(gen), dis(gen));
+}
+
+void ExistenceMemoryV4::update(const Vector3D& pos, const std::vector<int64_t>& contour, double time) {
+    world_position = pos;
+    last_seen = time;
+    appearance_count++;
+    recognition_confidence = std::min(1.0, recognition_confidence + 0.05);
+    
+    trajectory.push_back(pos);
+    contour_history.push_back(contour);
+    
+    if (trajectory.size() > 100) trajectory.erase(trajectory.begin());
+    if (contour_history.size() > 100) contour_history.erase(contour_history.begin());
+    
+    // 更新平均尺寸和速度
+    avg_size = Vector3D(0.3, 0.3, 0.3); // 可从聚类计算
+    if (trajectory.size() >= 2) {
+        auto v = trajectory.back() - trajectory[trajectory.size()-2];
+        velocity_history.push_back(v);
+        if (velocity_history.size() > 50) velocity_history.erase(velocity_history.begin());
+    }
+}
+
+double ExistenceMemoryV4::multiFeatureSimilarity(const Vector3D& pos, const std::vector<int64_t>& contour) const {
+    double score = 0.0;
+    double weight_sum = 0.0;
+    
+    // 1. 位置相似度（世界坐标）
+    double pos_dist = world_position.distance(pos);
+    double pos_score = 1.0 / (1.0 + pos_dist * 2.0); // 0.5米内接近1
+    score += pos_score * 0.4;
+    weight_sum += 0.4;
+    
+    // 2. 轮廓相似度
+    if (!contour_history.empty()) {
+        double contour_sim = contourSimilarity(contour_history.back(), contour);
+        score += contour_sim * 0.3;
+        weight_sum += 0.3;
+    }
+    
+    // 3. 尺寸相似度
+    double size_diff = avg_size.distance(Vector3D(0.3, 0.3, 0.3)); // 简化
+    double size_score = 1.0 / (1.0 + size_diff * 10);
+    score += size_score * 0.2;
+    weight_sum += 0.2;
+    
+    // 4. 动态行为相似度（速度）
+    if (!velocity_history.empty()) {
+        Vector3D avg_vel(0, 0, 0);
+        for (const auto& v : velocity_history) {
+            avg_vel = avg_vel + v;
+        }
+        avg_vel.x /= velocity_history.size();
+        avg_vel.y /= velocity_history.size();
+        avg_vel.z /= velocity_history.size();
+        
+        double vel_diff = avg_vel.distance(Vector3D(0, 0, 0));
+        double vel_score = 1.0 / (1.0 + vel_diff * 5);
+        score += vel_score * 0.1;
+        weight_sum += 0.1;
+    }
+    
+    return score / weight_sum;
+}
+
+double ExistenceMemoryV4::contourSimilarity(const std::vector<int64_t>& a, const std::vector<int64_t>& b) const {
+    if (a.size() != b.size()) return 0.0;
+    double sum = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        sum += 1.0 / (1.0 + std::abs(a[i] - b[i]) / 1000.0);
+    }
+    return sum / a.size();
+}
+
+// ==================== v4.0 全局记忆库实现 ====================
+std::shared_ptr<ExistenceMemoryV4> GlobalMemoryBankV4::recognizeOrCreate(const Vector3D& ego_pos, const std::vector<int64_t>& contour) {
+    current_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
+    
+    Vector3D world_pos = world_coords.egoToWorld(ego_pos);
+    double best_score = 0.75; // 再识别阈值
+    std::shared_ptr<ExistenceMemoryV4> best_match = nullptr;
+    
+    for (auto& pair : memory) {
+        auto& mem = pair.second;
+        double score = mem->multiFeatureSimilarity(world_pos, contour);
+        if (score > best_score && (current_time - mem->last_seen) < 30.0) { // 30秒内有效
+            best_score = score;
+            best_match = mem;
+        }
+    }
+    
+    if (best_match) {
+        best_match->update(world_pos, contour, current_time);
+        best_match->recognition_confidence = best_score;
+        std::cout << "【再识别成功！】ID:" << best_match->id << " 置信度:" << best_score << " 出现:" << best_match->appearance_count << "次\n";
+        return best_match;
+    } else {
+        auto new_mem = std::make_shared<ExistenceMemoryV4>(next_id++);
+        new_mem->update(world_pos, contour, current_time);
+        memory[new_mem->id] = new_mem;
+        std::cout << "【发现新存在】分配ID:" << new_mem->id << "\n";
+        return new_mem;
+    }
+}

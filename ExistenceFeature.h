@@ -6,6 +6,7 @@
 #include <map>
 #include <random>
 #include <chrono>
+#include <string>
 #include "Vector3D.h"
 
 // 简单的颜色结构体，替代OpenCV的cv::viz::Color
@@ -31,6 +32,43 @@ public:
 };
 
 extern WorldCoordinateSystem world_coords; // 全局世界坐标系
+
+// ==================== 升级版记忆特征（v4.0支持多重验证）===================
+class ExistenceMemoryV4 {
+public:
+    int id;
+    std::wstring code = L""; // 抽象存在树编码（如"001"=妈妈）
+    Vector3D world_position; // 最后一次世界坐标
+    Vector3D avg_size; // 平均尺寸
+    std::vector<Vector3D> trajectory; // 世界坐标轨迹（最多100帧）
+    std::vector<std::vector<int64_t>> contour_history; // 轮廓特征历史
+    std::vector<Vector3D> velocity_history; // 速度历史
+    double first_seen = 0, last_seen = 0;
+    int appearance_count = 0;
+    double recognition_confidence = 0.0; // 再识别置信度（0-1）
+    Color color;
+
+    ExistenceMemoryV4(int i);
+    
+    // 更新记忆（每次看到时）
+    void update(const Vector3D& pos, const std::vector<int64_t>& contour, double time);
+    
+    // 多重特征相似度评分（0-1）
+    double multiFeatureSimilarity(const Vector3D& pos, const std::vector<int64_t>& contour) const;
+
+private:
+    double contourSimilarity(const std::vector<int64_t>& a, const std::vector<int64_t>& b) const;
+};
+
+// ==================== 全局记忆库（v4.0支持再识别）===================
+class GlobalMemoryBankV4 {
+public:
+    std::map<int, std::shared_ptr<ExistenceMemoryV4>> memory;
+    int next_id = 1;
+    double current_time = 0;
+
+    std::shared_ptr<ExistenceMemoryV4> recognizeOrCreate(const Vector3D& ego_pos, const std::vector<int64_t>& contour);
+};
 
 class ExistenceFeature {
 public:

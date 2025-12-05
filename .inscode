@@ -1,4 +1,4 @@
-run = "./digital_life_v3"
+run = "./digital_life_v4"
 is_gui = false
 is_resident = false
 is_html = false
