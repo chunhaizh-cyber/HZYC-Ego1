@@ -1,0 +1,1 @@
+/usr/bin/c++     CMakeFiles/DigitalLifeVisionSystem.dir/main.cpp.o CMakeFiles/DigitalLifeVisionSystem.dir/Vector3D.cpp.o CMakeFiles/DigitalLifeVisionSystem.dir/ExistenceFeature.cpp.o CMakeFiles/DigitalLifeVisionSystem.dir/PointCloudProcessor.cpp.o  -o bin/DigitalLifeVisionSystem  -lpthread 
